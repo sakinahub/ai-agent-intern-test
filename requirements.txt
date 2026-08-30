@@ -1,0 +1,7 @@
+streamlit
+sentence-transformers
+numpy
+scikit-learn
+google-genai
+python-dotenv
+pytest
