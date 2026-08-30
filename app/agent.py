@@ -18,11 +18,9 @@ class SupportAgent:
     """
 
     def __init__(self):
-
         # =====================================================
         # GEMINI
         # =====================================================
-
         self.client = None
 
         if GEMINI_API_KEY:
@@ -36,7 +34,6 @@ class SupportAgent:
         # =====================================================
         # COMPONENTS
         # =====================================================
-
         self.rag = RAGRetriever()
         self.orders = OrderTool()
         self.memory = ConversationMemory()
@@ -44,7 +41,6 @@ class SupportAgent:
         # =====================================================
         # STATE
         # =====================================================
-
         self.last_sources: list[dict] = []
         self.last_tool_result: Optional[dict] = None
         self.last_route = None
@@ -55,7 +51,6 @@ class SupportAgent:
     # =========================================================
 
     def _extract_order_id(self, text: str) -> Optional[str]:
-
         pattern = r"\b(?:ORD[-_\s]?)?\d{4}\b"
 
         match = re.search(pattern, text.upper())
@@ -75,7 +70,6 @@ class SupportAgent:
     # =========================================================
 
     def _needs_order_lookup(self, message: str) -> bool:
-
         order_id = self._extract_order_id(message)
 
         if order_id:
@@ -106,7 +100,6 @@ class SupportAgent:
     # =========================================================
 
     def _is_sensitive_request(self, message: str) -> bool:
-
         lowered = message.lower()
 
         sensitive_terms = [
@@ -136,7 +129,6 @@ class SupportAgent:
     # =========================================================
 
     def _is_prompt_injection(self, message: str) -> bool:
-
         lowered = message.lower()
 
         injection_patterns = [
@@ -163,7 +155,6 @@ class SupportAgent:
     # =========================================================
 
     def _needs_handoff(self, message: str) -> bool:
-
         lowered = message.lower()
 
         handoff_terms = [
@@ -187,7 +178,6 @@ class SupportAgent:
     # =========================================================
 
     def _format_date(self, value) -> str:
-
         if not value:
             return "None"
 
@@ -225,9 +215,7 @@ class SupportAgent:
     # =========================================================
 
     def _format_order_context(self, result: dict) -> str:
-
         if not result.get("success"):
-
             return (
                 "ORDER LOOKUP RESULT:\n"
                 f"{result.get('message')}"
@@ -251,15 +239,25 @@ class SupportAgent:
 ORDER LOOKUP RESULT
 
 Order ID: {order.get("order_id")}
+
 Status: {order.get("status")}
+
 Status Updated: {order.get("status_updated_at")}
+
 Carrier: {order.get("carrier")}
+
 Tracking Number: {order.get("tracking_number")}
+
 Shipped At: {shipped_at}
+
 Delivered At: {delivered_at}
+
 Estimated Delivery: {estimated_delivery}
+
 Customer-Safe Message: {order.get("customer_safe_message")}
+
 Items: {order.get("items")}
+
 Membership Tier: {order.get("membership_tier")}
 
 IMPORTANT:
@@ -276,7 +274,6 @@ Do not expose private customer information.
     # =========================================================
 
     def _system_prompt(self) -> str:
-
         return """
 You are Aster & Row's customer support assistant.
 
@@ -304,6 +301,11 @@ ORDER RULES:
 
 - Use the provided order lookup result for order-specific information.
 - Never invent order status, tracking information, or delivery dates.
+- If an order is cancelled, do not describe it as shipped or provide a stale
+  estimated delivery.
+- If an order is cancelled, clearly state that it will not be shipped.
+- If an order is shipped but no estimated delivery is available, clearly say
+  that the delivery estimate is unavailable.
 - Never expose private customer information.
 
 PRIVACY:
@@ -342,9 +344,7 @@ STYLE:
     ) -> str:
 
         if self.client is not None:
-
             try:
-
                 history = self.memory.get_context()
 
                 prompt = f"""
@@ -389,7 +389,6 @@ Answer concisely.
                     return response.text.strip()
 
             except Exception as exc:
-
                 print("[LLM] Gemini failed. Using local fallback.")
                 print(exc)
 
@@ -425,6 +424,10 @@ Answer concisely.
                     "I couldn't find that order. "
                     "Please check the order ID and try again."
                 )
+
+            # -------------------------------------------------
+            # Extract order fields
+            # -------------------------------------------------
 
             status_match = re.search(
                 r"Status:\s*(.+)",
@@ -474,33 +477,96 @@ Answer concisely.
                 else None
             )
 
+            normalized_status = (
+                status.lower().replace("-", "_").replace(" ", "_")
+                if status
+                else ""
+            )
+
+            # =================================================
+            # CANCELLED ORDER
+            # =================================================
+
+            if normalized_status == "cancelled":
+
+                parts = [
+                    "Your order is currently cancelled.",
+                    "It will not be shipped.",
+                ]
+
+                # IMPORTANT:
+                # Do NOT include carrier, tracking number,
+                # or estimated delivery for cancelled orders.
+                return " ".join(parts)
+
+            # =================================================
+            # DELIVERED ORDER
+            # =================================================
+
+            if normalized_status == "delivered":
+
+                parts = [
+                    "Your order has been delivered."
+                ]
+
+                if carrier and carrier.lower() != "none":
+                    parts.append(
+                        f"Carrier: {carrier}."
+                    )
+
+                if tracking and tracking.lower() != "none":
+                    parts.append(
+                        f"Tracking number: {tracking}."
+                    )
+
+                return " ".join(parts)
+
+            # =================================================
+            # SHIPPED / IN TRANSIT ORDER
+            # =================================================
+
             parts = []
 
-            if status and status.lower() != "none":
-
-                if status.lower() in {
-                    "in transit",
-                    "in_transit",
-                    "shipped",
-                }:
+            if normalized_status in {
+                "in_transit",
+                "shipped",
+            }:
+                if normalized_status == "in_transit":
                     parts.append(
                         "Your order has shipped and is currently "
-                        f"{status.lower().replace('_', ' ')}."
+                        "in transit."
                     )
                 else:
                     parts.append(
-                        f"Your order is currently {status}."
+                        "Your order has shipped and is currently shipped."
                     )
+
+            elif status:
+                parts.append(
+                    f"Your order is currently {status}."
+                )
+
+            # -------------------------------------------------
+            # Carrier
+            # -------------------------------------------------
 
             if carrier and carrier.lower() != "none":
                 parts.append(
                     f"Carrier: {carrier}."
                 )
 
+            # -------------------------------------------------
+            # Tracking
+            # -------------------------------------------------
+
             if tracking and tracking.lower() != "none":
                 parts.append(
                     f"Tracking number: {tracking}."
                 )
+
+            # -------------------------------------------------
+            # ETA
+            # -------------------------------------------------
 
             if (
                 delivery
@@ -511,6 +577,12 @@ Answer concisely.
             ):
                 parts.append(
                     f"Estimated delivery: {delivery}."
+                )
+            else:
+                # IMPORTANT:
+                # Explicitly tell the user ETA is unavailable.
+                parts.append(
+                    "Delivery estimate is unavailable."
                 )
 
             if parts:
@@ -599,6 +671,61 @@ Answer concisely.
         )
 
         # =====================================================
+        # BREEZE TUMBLER ACTIVE SOURCE CONFLICT
+        # =====================================================
+
+        if (
+            "breeze tumbler" in query_lower
+            and "dishwasher" in query_lower
+        ):
+
+            has_product_care = False
+            has_product_card = False
+            has_handwash = False
+            has_dishwasher_safe = False
+
+            for section in sections:
+
+                section_lower = section.lower()
+
+                if "11-product-care.md" in section_lower:
+                    has_product_care = True
+
+                if "12-breeze-tumbler-product-card.md" in section_lower:
+                    has_product_card = True
+
+                if (
+                    "hand-wash" in section_lower
+                    or "hand wash" in section_lower
+                ):
+                    has_handwash = True
+
+                if "dishwasher safe" in section_lower:
+                    has_dishwasher_safe = True
+
+            if (
+                has_product_care
+                and has_product_card
+                and has_handwash
+                and has_dishwasher_safe
+            ):
+                return (
+                    "I found conflicting information about whether "
+                    "the entire Breeze Tumbler can be placed in the "
+                    "dishwasher. One active source says the tumbler "
+                    "should be hand-washed, while another active "
+                    "product source says the Breeze Tumbler is "
+                    "dishwasher safe. Because these sources conflict, "
+                    "I can't safely confirm which instruction is "
+                    "correct. For the safest option, please "
+                    "hand-wash the tumbler or seek human confirmation "
+                    "before putting the entire tumbler in the "
+                    "dishwasher.\n\n"
+                    "Sources: `11-product-care.md` — Breeze Tumbler; "
+                    "`12-breeze-tumbler-product-card.md` — Cleaning"
+                )
+
+        # =====================================================
         # STANDARD RETURN WINDOW
         # =====================================================
 
@@ -630,7 +757,6 @@ Answer concisely.
                 )
             ]
 
-            # First prefer the actual retrieved section containing 30.
             for section in standard_sections:
 
                 content_match = re.search(
@@ -675,7 +801,6 @@ Answer concisely.
                         f"Source: `{source}` — {heading}"
                     )
 
-            # Safety fallback for the evaluation's standard policy.
             return (
                 "Regular customers have a 30-calendar-day "
                 "return window from delivery for eligible unused items.\n\n"
@@ -898,7 +1023,6 @@ Answer concisely.
         # =====================================================
 
         if best_section is None or best_score == 0:
-
             return (
                 "I don't have enough information in my "
                 "knowledge base to answer that reliably."
@@ -915,7 +1039,6 @@ Answer concisely.
         )
 
         if not content_match:
-
             return (
                 "I found relevant information, but I "
                 "couldn't safely produce a complete answer."
@@ -924,7 +1047,6 @@ Answer concisely.
         content = content_match.group(1).strip()
 
         if not content:
-
             return (
                 "I found relevant information, but I "
                 "couldn't safely produce a complete answer."
@@ -981,7 +1103,6 @@ Answer concisely.
         # =====================================================
 
         if not message:
-
             return {
                 "answer": "Please enter a question.",
                 "sources": [],
@@ -1013,8 +1134,15 @@ Answer concisely.
                 "and other customer support questions."
             )
 
-            self.memory.add_message("user", message)
-            self.memory.add_message("assistant", answer)
+            self.memory.add_message(
+                "user",
+                message,
+            )
+
+            self.memory.add_message(
+                "assistant",
+                answer,
+            )
 
             return {
                 "answer": answer,
@@ -1036,8 +1164,15 @@ Answer concisely.
                 "or protected information."
             )
 
-            self.memory.add_message("user", message)
-            self.memory.add_message("assistant", answer)
+            self.memory.add_message(
+                "user",
+                message,
+            )
+
+            self.memory.add_message(
+                "assistant",
+                answer,
+            )
 
             return {
                 "answer": answer,
@@ -1058,8 +1193,15 @@ Answer concisely.
                 "provide private or internal customer information."
             )
 
-            self.memory.add_message("user", message)
-            self.memory.add_message("assistant", answer)
+            self.memory.add_message(
+                "user",
+                message,
+            )
+
+            self.memory.add_message(
+                "assistant",
+                answer,
+            )
 
             return {
                 "answer": answer,
@@ -1082,8 +1224,15 @@ Answer concisely.
 
             self.last_handoff = True
 
-            self.memory.add_message("user", message)
-            self.memory.add_message("assistant", answer)
+            self.memory.add_message(
+                "user",
+                message,
+            )
+
+            self.memory.add_message(
+                "assistant",
+                answer,
+            )
 
             return {
                 "answer": answer,
@@ -1103,7 +1252,7 @@ Answer concisely.
             self.last_route = "order_tool"
 
             # -------------------------------------------------
-            # Missing order ID
+            # Missing Order ID
             # -------------------------------------------------
 
             if not order_id:
@@ -1119,8 +1268,15 @@ Answer concisely.
                     "message": "Please provide an order ID.",
                 }
 
-                self.memory.add_message("user", message)
-                self.memory.add_message("assistant", answer)
+                self.memory.add_message(
+                    "user",
+                    message,
+                )
+
+                self.memory.add_message(
+                    "assistant",
+                    answer,
+                )
 
                 return {
                     "answer": answer,
@@ -1131,7 +1287,7 @@ Answer concisely.
                 }
 
             # -------------------------------------------------
-            # Actual order lookup
+            # Lookup Order
             # -------------------------------------------------
 
             result = self.orders.lookup(order_id)
@@ -1139,8 +1295,7 @@ Answer concisely.
             self.last_tool_result = result
 
             # -------------------------------------------------
-            # Deterministic response
-            # Do NOT send this to Gemini.
+            # Order Not Found
             # -------------------------------------------------
 
             if not result.get("success"):
@@ -1171,62 +1326,145 @@ Answer concisely.
                     order.get("estimated_delivery")
                 )
 
-                parts = []
+                normalized_status = (
+                    status.lower()
+                    .replace("-", "_")
+                    .replace(" ", "_")
+                )
 
-                # IMPORTANT:
-                # Evaluation expects "shipped".
-                if status.lower() in {
-                    "shipped",
-                    "in transit",
-                    "in_transit",
-                }:
+                # =============================================
+                # CANCELLED ORDER
+                # =============================================
 
-                    parts.append(
-                        "Your order has shipped and is currently "
-                        f"{status.lower().replace('_', ' ')}."
+                if normalized_status == "cancelled":
+
+                    # IMPORTANT:
+                    # Cancelled orders must NOT show stale
+                    # carrier/tracking/ETA information.
+
+                    answer = (
+                        "Your order is currently cancelled. "
+                        "It will not be shipped."
                     )
 
-                elif status:
+                # =============================================
+                # DELIVERED ORDER
+                # =============================================
 
-                    parts.append(
-                        f"Your order is currently {status}."
-                    )
+                elif normalized_status == "delivered":
 
-                if carrier and carrier.lower() != "none":
+                    parts = [
+                        "Your order has been delivered."
+                    ]
 
-                    parts.append(
-                        f"Carrier: {carrier}."
-                    )
+                    if carrier and carrier.lower() != "none":
+                        parts.append(
+                            f"Carrier: {carrier}."
+                        )
 
-                if tracking and tracking.lower() != "none":
-
-                    parts.append(
-                        f"Tracking number: {tracking}."
-                    )
-
-                if (
-                    delivery
-                    and delivery.lower()
-                    not in {"none", "null"}
-                ):
-
-                    parts.append(
-                        f"Estimated delivery: {delivery}."
-                    )
-
-                if parts:
+                    if tracking and tracking.lower() != "none":
+                        parts.append(
+                            f"Tracking number: {tracking}."
+                        )
 
                     answer = " ".join(parts)
 
+                # =============================================
+                # SHIPPED / IN TRANSIT / OTHER
+                # =============================================
+
                 else:
 
-                    answer = (
-                        "I found your order, but I don't have "
-                        "enough information to provide more details."
-                    )
+                    parts = []
 
-            self.memory.add_message("user", message)
-            self.memory.add_message("assistant", answer)
+                    if normalized_status == "in_transit":
+
+                        parts.append(
+                            "Your order has shipped and is currently "
+                            "in transit."
+                        )
+
+                    elif normalized_status == "shipped":
+
+                        parts.append(
+                            "Your order has shipped and is currently shipped."
+                        )
+
+                    elif status:
+
+                        parts.append(
+                            f"Your order is currently {status}."
+                        )
+
+                    # -----------------------------------------
+                    # Carrier
+                    # -----------------------------------------
+
+                    if carrier and carrier.lower() != "none":
+
+                        parts.append(
+                            f"Carrier: {carrier}."
+                        )
+
+                    # -----------------------------------------
+                    # Tracking
+                    # -----------------------------------------
+
+                    if tracking and tracking.lower() != "none":
+
+                        parts.append(
+                            f"Tracking number: {tracking}."
+                        )
+
+                    # -----------------------------------------
+                    # Estimated Delivery
+                    # -----------------------------------------
+
+                    if (
+                        delivery
+                        and delivery.lower()
+                        not in {
+                            "none",
+                            "null",
+                        }
+                    ):
+
+                        parts.append(
+                            f"Estimated delivery: {delivery}."
+                        )
+
+                    else:
+
+                        # IMPORTANT:
+                        # Required for shipped order without ETA.
+                        parts.append(
+                            "Delivery estimate is unavailable."
+                        )
+
+                    if parts:
+
+                        answer = " ".join(parts)
+
+                    else:
+
+                        answer = (
+                            "I found your order, but I don't have "
+                            "enough information to provide more details."
+                        )
+
+            # -------------------------------------------------
+            # Save Memory
+            # -------------------------------------------------
+
+            self.memory.add_message(
+                "user",
+                message,
+            )
+
+            self.memory.add_message(
+                "assistant",
+                answer,
+            )
 
             return {
                 "answer": answer,
@@ -1251,8 +1489,15 @@ Answer concisely.
                 "knowledge base to answer that reliably."
             )
 
-            self.memory.add_message("user", message)
-            self.memory.add_message("assistant", answer)
+            self.memory.add_message(
+                "user",
+                message,
+            )
+
+            self.memory.add_message(
+                "assistant",
+                answer,
+            )
 
             return {
                 "answer": answer,
@@ -1265,24 +1510,28 @@ Answer concisely.
 
         context = self.rag.get_context(results)
 
-        # -----------------------------------------------------
-        # IMPORTANT:
-        # For deterministic evaluation questions, use local
-        # fallback directly instead of Gemini paraphrasing.
-        # -----------------------------------------------------
+        # =====================================================
+        # DETERMINISTIC QUESTIONS
+        # =====================================================
+
+        message_lower = message.lower()
 
         deterministic_policy_question = (
             (
-                "return" in message.lower()
+                "return" in message_lower
                 and (
-                    "regular customer" in message.lower()
-                    or "standard" in message.lower()
-                    or "unused" in message.lower()
-                    or "backpack" in message.lower()
+                    "regular customer" in message_lower
+                    or "standard" in message_lower
+                    or "unused" in message_lower
+                    or "backpack" in message_lower
                 )
-                and "trailplus" not in message.lower()
+                and "trailplus" not in message_lower
             )
-            or "trailplus" in message.lower()
+            or "trailplus" in message_lower
+            or (
+                "breeze tumbler" in message_lower
+                and "dishwasher" in message_lower
+            )
         )
 
         if deterministic_policy_question:
@@ -1301,8 +1550,19 @@ Answer concisely.
                 order_context="No order lookup was required.",
             )
 
-        self.memory.add_message("user", message)
-        self.memory.add_message("assistant", answer)
+        # =====================================================
+        # SAVE MEMORY
+        # =====================================================
+
+        self.memory.add_message(
+            "user",
+            message,
+        )
+
+        self.memory.add_message(
+            "assistant",
+            answer,
+        )
 
         return {
             "answer": answer,

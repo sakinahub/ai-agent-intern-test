@@ -134,3 +134,66 @@ def test_original_insufficient_information(agent):
         or "insufficient" in answer
         or "don't have enough" in answer
     )
+
+def test_cancelled_order_stale_eta(agent):
+    result = agent.chat(
+        "When will order ORD-1004 arrive?"
+    )
+
+    answer = result["answer"].lower()
+
+    assert result["route"] == "order_tool"
+    assert "cancelled" in answer
+    assert "will not be shipped" in answer or "not be shipped" in answer
+    assert "august 16, 2026" not in answer
+    assert "still arriving" not in answer
+
+
+def test_shipped_order_without_eta(agent):
+    result = agent.chat(
+        "When will ORD-1011 get here?"
+    )
+
+    answer = result["answer"].lower()
+
+    assert result["route"] == "order_tool"
+    assert "shipped" in answer
+    assert "canada post" in answer
+    assert (
+        "delivery estimate is unavailable" in answer
+        or "estimate is unavailable" in answer
+        or "no delivery estimate" in answer
+    )
+
+
+def test_no_lifetime_warranty(agent):
+    result = agent.chat(
+        "Do all Aster & Row products have a lifetime warranty?"
+    )
+
+    answer = result["answer"].lower()
+
+    assert "lifetime warranty" in answer
+    assert "2 years" in answer
+    assert "1 year" in answer
+    assert "07-warranty.md" in str(result["sources"])
+
+
+def test_genuine_active_source_conflict(agent):
+    result = agent.chat(
+        "Can I put the entire Breeze Tumbler in the dishwasher?"
+    )
+
+    answer = result["answer"].lower()
+    sources = str(result["sources"])
+
+    assert "conflict" in answer
+    assert "hand-wash" in answer or "hand wash" in answer
+    assert "dishwasher safe" in answer
+    assert "11-product-care.md" in sources
+    assert "12-breeze-tumbler-product-card.md" in sources
+    assert (
+        "human" in answer
+        or "confirmation" in answer
+        or "safest" in answer
+    )
