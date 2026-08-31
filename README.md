@@ -277,7 +277,7 @@ The agent does not falsely claim that an action such as a refund, cancellation, 
 ## Clone the repository
 
 ```bash
-git clone <YOUR_GITHUB_REPOSITORY_URL>
+git clone https://github.com/sakinahub/ai-agent-intern-test
 cd ai-agent-intern-test
 ```
 
@@ -331,7 +331,7 @@ A safe template is provided in:
 After activating the virtual environment:
 
 ```bash
-python -m app.main
+uvicorn app.main:app --reload
 ```
 
 If the project is being run through the available CLI/API entry point, use the corresponding application command documented in the source code.
